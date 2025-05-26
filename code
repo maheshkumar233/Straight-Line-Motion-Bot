@@ -1,0 +1,39 @@
+#define Enc1A 2 //encoder motor 1 ena INTERREPT
+#define Enc2A 3 //encoder motor 2 ena INTERREPT
+#define Enc1B 4 //encoder motor 1 enb
+#define Enc2B 5 //encoder motor 2 enb
+#define Ain1  7 
+#define Ain2  8
+#define PWMA  6
+#define Bin1  12
+#define Bin2  13
+#define PWMB  11  
+#define Stby  10 //standby pin
+#define push  9 //push button
+#define led1  A0 //green
+#define led2  A1 //red
+
+int pos = 0;
+
+void setup(){
+  Serial.begin(9600);
+  pinMode(Enc1A, INPUT);
+  pinMode(Enc1B, INPUT);
+  pinMode(Enc2A, INPUT);
+  pinMode(Enc2B, INPUT);
+  attachInterrupt(digitalPinToInterrupt(Enc1A), readEncoder , RISING);
+}
+
+void loop(){
+  Serial.println(pos);
+}
+
+void readEncoder();{
+  int b = digitalRead(Enc1B);
+  if(b>0){
+    pos++;
+  }
+  else{
+    pos--;
+  }
+}
