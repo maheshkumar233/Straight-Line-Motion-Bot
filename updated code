@@ -1,0 +1,154 @@
+#include <PID_v1.h>
+
+// ====== Motor Driver Pins ======
+#define Enc1A 2    // Encoder 1 interrupt pin
+#define Enc2A 3    // Encoder 2 interrupt pin
+#define Enc1B 4
+#define Enc2B 5
+
+#define Ain1 7
+#define Ain2 8
+#define PWMA 6
+
+#define Bin1 12
+#define Bin2 13
+#define PWMB 11
+
+#define Stby 10    // Standby pin
+
+// ====== Encoder Settings ======
+#define PULSES_PER_REV 60
+#define REV_LIMIT 10
+#define TARGET_PULSES (PULSES_PER_REV * REV_LIMIT)
+
+// ====== Encoder Count Variables ======
+volatile long encoderCount1 = 0;
+volatile long encoderCount2 = 0;
+
+// ====== PID Variables ======
+double setSpeed1 = 100;
+double setSpeed2 = 100;
+
+double speed1 = 0, speed2 = 0;
+double output1 = 0, output2 = 0;
+
+// Tune individually
+double Kp1 = 1, Ki1 = 0, Kd1 = 0;
+double Kp2 = 1, Ki2 = 0.1, Kd2 = 0;
+
+PID pid1(&speed1, &output1, &setSpeed1, Kp1, Ki1, Kd1, DIRECT);
+PID pid2(&speed2, &output2, &setSpeed2, Kp2, Ki2, Kd2, DIRECT);
+
+// ====== Interrupts ======
+void encoder1ISR() {
+  if (digitalRead(Enc1B)) encoderCount1++;
+  else encoderCount1--;
+}
+
+void encoder2ISR() {
+  if (digitalRead(Enc2B)) encoderCount2++;
+  else encoderCount2--;
+}
+
+// ====== Setup ======
+void setup() {
+  Serial.begin(9600);
+
+  // Encoder pins
+  pinMode(Enc1A, INPUT);
+  pinMode(Enc1B, INPUT);
+  pinMode(Enc2A, INPUT);
+  pinMode(Enc2B, INPUT);
+
+  attachInterrupt(digitalPinToInterrupt(Enc1A), encoder1ISR, RISING);
+  attachInterrupt(digitalPinToInterrupt(Enc2A), encoder2ISR, RISING);
+
+  // Motor control pins
+  pinMode(Ain1, OUTPUT);
+  pinMode(Ain2, OUTPUT);
+  pinMode(PWMA, OUTPUT);
+
+  pinMode(Bin1, OUTPUT);
+  pinMode(Bin2, OUTPUT);
+  pinMode(PWMB, OUTPUT);
+
+  pinMode(Stby, OUTPUT);
+  digitalWrite(Stby, HIGH);
+
+  // Start PID
+  pid1.SetMode(AUTOMATIC);
+  pid2.SetMode(AUTOMATIC);
+
+  pid1.SetOutputLimits(0, 255);
+  pid2.SetOutputLimits(0, 255);
+}
+
+// ====== Main Loop ======
+unsigned long lastTime = 0;
+long lastCount1 = 0;
+long lastCount2 = 0;
+
+void loop() {
+  // Stop when both motors reach similar counts
+  if (abs(encoderCount1 - encoderCount2) <= 10 && abs(encoderCount1) >= TARGET_PULSES) {
+    stopMotors();
+    Serial.println("COMPLETED");
+    while (true); // Freeze execution
+  }
+
+  // Run PID every 100ms
+  if (millis() - lastTime >= 100) {
+    long currCount1 = encoderCount1;
+    long currCount2 = encoderCount2;
+
+    speed1 = abs(currCount1 - lastCount1);
+    speed2 = abs(currCount2 - lastCount2);
+
+    lastCount1 = currCount1;
+    lastCount2 = currCount2;
+    lastTime = millis();
+
+    // 🧠 Dynamic Compensation
+    int pulseDiff = currCount1 - currCount2;
+    setSpeed2 = setSpeed1 + pulseDiff * 0.2; // Gain can be tuned
+    setSpeed2 = constrain(setSpeed2, 0, 200); // Avoid overdrive
+
+    pid1.Compute();
+    pid2.Compute();
+
+    runMotorA(output1);
+    runMotorB(output2);
+
+    // Debug output
+    Serial.print("Enc1: "); Serial.print(currCount1);
+    Serial.print(" | Enc2: "); Serial.print(currCount2);
+    Serial.print(" | Out1: "); Serial.print(output1);
+    Serial.print(" | Out2: "); Serial.print(output2);
+    Serial.print(" | Set2: "); Serial.println(setSpeed2);
+  }
+}
+
+// ====== Motor Functions ======
+void runMotorA(int pwm) {
+  digitalWrite(Ain1, LOW);
+  digitalWrite(Ain2, HIGH);
+  analogWrite(PWMA, pwm);
+}
+
+void runMotorB(int pwm) {
+  digitalWrite(Bin1, HIGH);
+  digitalWrite(Bin2, LOW);
+  analogWrite(PWMB, pwm);
+}
+
+void stopMotors() {
+  analogWrite(PWMA, 0);
+  analogWrite(PWMB, 0);
+
+  digitalWrite(Ain1, LOW);
+  digitalWrite(Ain2, LOW);
+  digitalWrite(Bin1, LOW);
+  digitalWrite(Bin2, LOW);
+
+  digitalWrite(Stby, LOW);
+}
