@@ -1,0 +1,179 @@
+#include <PID_v1.h>
+
+// ========== Encoder Pins ==========
+#define Enc1A 2
+#define Enc2A 3
+#define Enc1B 4
+#define Enc2B 5
+
+// ========== Motor A Pins ==========
+#define Ain1 7
+#define Ain2 8
+#define PWMA 6
+
+// ========== Motor B Pins ==========
+#define Bin1 12
+#define Bin2 13
+#define PWMB 11
+
+// ========== Standby Pin ==========
+#define Stby 10
+
+// ========== Encoder & Target Settings ==========
+#define PULSES_PER_REV 180
+#define REV_LIMIT 10
+#define TARGET_PULSES (PULSES_PER_REV * REV_LIMIT)
+
+// ========== Encoder Count ==========
+volatile long encoderCount1 = 0;
+volatile long encoderCount2 = 0;
+
+// ========== Speed and Output Variables ==========
+double setSpeed1 = 0;   // Starts at 0, will ramp to 100
+double setSpeed2 = 0;
+double speed1 = 0, speed2 = 0;
+double output1 = 0, output2 = 0;
+
+// ========== PID Constants ==========
+double Kp1 = 3, Ki1 = 0, Kd1 = 0;
+double Kp2 = 3, Ki2 = 0, Kd2 = 0;
+
+// ========== PID Setup ==========
+PID pid1(&speed1, &output1, &setSpeed1, Kp1, Ki1, Kd1, DIRECT);
+PID pid2(&speed2, &output2, &setSpeed2, Kp2, Ki2, Kd2, DIRECT);
+
+// ========== State Variables ==========
+bool completed = false;
+unsigned long lastTime = 0;
+long lastCount1 = 0;
+long lastCount2 = 0;
+
+// ========== Encoder Interrupt Service Routines ==========
+void encoder1ISR() {
+  if (digitalRead(Enc1B)) encoderCount1++;
+  else encoderCount1--;
+}
+
+void encoder2ISR() {
+  if (digitalRead(Enc2B)) encoderCount2++;
+  else encoderCount2--;
+}
+
+// ========== Setup Function ==========
+void setup() {
+  Serial.begin(9600);
+
+  // Encoder Pins
+  pinMode(Enc1A, INPUT);
+  pinMode(Enc1B, INPUT);
+  pinMode(Enc2A, INPUT);
+  pinMode(Enc2B, INPUT);
+
+  attachInterrupt(digitalPinToInterrupt(Enc1A), encoder1ISR, RISING);
+  attachInterrupt(digitalPinToInterrupt(Enc2A), encoder2ISR, RISING);
+
+  // Motor Pins
+  pinMode(Ain1, OUTPUT);
+  pinMode(Ain2, OUTPUT);
+  pinMode(PWMA, OUTPUT);
+  pinMode(Bin1, OUTPUT);
+  pinMode(Bin2, OUTPUT);
+  pinMode(PWMB, OUTPUT);
+  pinMode(Stby, OUTPUT);
+  digitalWrite(Stby, HIGH);
+
+  // PID Configuration
+  pid1.SetMode(AUTOMATIC);
+  pid2.SetMode(AUTOMATIC);
+  pid1.SetOutputLimits(0, 255);
+  pid2.SetOutputLimits(0, 255);
+
+  // Init Counters
+  encoderCount1 = 0;
+  encoderCount2 = 0;
+  lastCount1 = 0;
+  lastCount2 = 0;
+}
+
+// ========== Main Loop ==========
+void loop() {
+  // Stop if both motors reach target
+  if (!completed && encoderCount1 >= TARGET_PULSES && encoderCount2 >= TARGET_PULSES) {
+    stopMotors();
+    completed = true;
+    Serial.println("COMPLETED");
+    return;
+  }
+
+  if (completed) return;
+
+  if (millis() - lastTime >= 100) {
+    long currCount1 = encoderCount1;
+    long currCount2 = encoderCount2;
+
+    speed1 = abs(currCount1 - lastCount1);
+    speed2 = abs(currCount2 - lastCount2);
+
+    lastCount1 = currCount1;
+    lastCount2 = currCount2;
+    lastTime = millis();
+
+    // 🔥 RAMP-UP LOGIC
+    if (setSpeed1 < 100) {
+      setSpeed1 += 5;  // 2 units per 100ms = ~5 seconds to 100
+      if (setSpeed1 > 100) setSpeed1 = 100;
+    }
+
+    // Match speed of Motor B to A with adjustment
+    int pulseDiff = currCount1 - currCount2;
+    setSpeed2 = setSpeed1 + pulseDiff * 0.2;
+    setSpeed2 = constrain(setSpeed2, 0, 200);
+
+    pid1.Compute();
+    pid2.Compute();
+
+    runMotorA(output1);
+    runMotorB(output2);
+
+    // DEBUG
+    Serial.print("Enc1: "); Serial.print(currCount1);
+    Serial.print(" | Enc2: "); Serial.print(currCount2);
+    Serial.print(" | Out1: "); Serial.print(output1);
+    Serial.print(" | Out2: "); Serial.print(output2);
+    Serial.print(" | Set1: "); Serial.print(setSpeed1);
+    Serial.print(" | Set2: "); Serial.println(setSpeed2);
+  }
+}
+
+// ========== Motor A Function ==========
+void runMotorA(int pwm) {
+  digitalWrite(Ain1, LOW);
+  digitalWrite(Ain2, HIGH);
+  analogWrite(PWMA, pwm);
+}
+
+// ========== Motor B Function ==========
+void runMotorB(int pwm) {
+  digitalWrite(Bin1, HIGH);
+  digitalWrite(Bin2, LOW);
+  analogWrite(PWMB, pwm);
+}
+
+// ========== Stop All Motors ==========
+void stopMotors() {
+  analogWrite(PWMA, 0);
+  analogWrite(PWMB, 0);
+  digitalWrite(Ain1, LOW);
+  digitalWrite(Ain2, LOW);
+  digitalWrite(Bin1, LOW);
+  digitalWrite(Bin2, LOW);
+  digitalWrite(Stby, LOW);
+
+  pid1.SetMode(MANUAL);
+  pid2.SetMode(MANUAL);
+  output1 = 0;
+  output2 = 0;
+
+  detachInterrupt(digitalPinToInterrupt(Enc1A));
+  detachInterrupt(digitalPinToInterrupt(Enc2A));
+}
